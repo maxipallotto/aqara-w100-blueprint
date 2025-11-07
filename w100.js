@@ -336,72 +336,106 @@ const PMTSD_from_W100 = {
         const stateUpdate = { state: {} };
         const partsForCombined = [];
         const pairs = payloadAscii.split('_');
-        const pmtsd = { P: 0, M: 0, T: 15, S: 0, D: 0 }; // Internal numeric values
+        
+        // Initialize P and M from meta.state since device may send partial updates
+        // Extract P and M from current system_mode if available
+        let initialP = 0;
+        let initialM = 0;
+        if (meta.state?.system_mode) {
+            if (meta.state.system_mode === 'off') {
+                initialP = 1;
+                // Keep M from previous state or default to 0
+                const modeMap = { 'cool': 0, 'heat': 1, 'auto': 2 };
+                initialM = 0; // Default to cool when off
+            } else {
+                initialP = 0;
+                const modeMap = { 'cool': 0, 'heat': 1, 'auto': 2 };
+                initialM = modeMap[meta.state.system_mode] ?? 0;
+            }
+        }
+        
+        const pmtsd = { P: initialP, M: initialM, T: 15, S: 0, D: 0 }; // Initialize from current state
         
         pairs.forEach(p => {
             if (p.length >= 2) {
                 const key = p[0].toLowerCase();
                 const value = p.slice(1);
                 let newKey;
+                let stateKey;
                 let processedValue = value;
+                let displayValue = value;
                 
                 switch (key) {
                     case 'p':
                         newKey = 'PW';
+                        stateKey = null; // Don't map P directly - will be combined with M for system_mode
                         processedValue = parseInt(value, 10);
-                        if (!isNaN(processedValue) && [0, 1].includes(processedValue)) {
-                            pmtsd.P = processedValue;
+                        if (isNaN(processedValue) || ![0, 1].includes(processedValue)) {
+                            meta.logger.warn(`Aqara W100: Invalid P value: ${value}`);
+                            return;
                         }
+                        pmtsd.P = processedValue;
+                        displayValue = processedValue;
+                        meta.logger.info(`Aqara W100: Parsed P=${processedValue}`);
                         break;
                     case 'm':
                         newKey = 'MW';
+                        stateKey = null; // Don't map M directly - will be combined with P for system_mode
                         processedValue = parseInt(value, 10);
-                        if (!isNaN(processedValue) && [0, 1, 2].includes(processedValue)) {
-                            pmtsd.M = processedValue;
+                        if (isNaN(processedValue) || ![0, 1, 2].includes(processedValue)) {
+                            meta.logger.warn(`Aqara W100: Invalid M value: ${value}`);
+                            return;
                         }
+                        pmtsd.M = processedValue;
+                        displayValue = processedValue;
+                        meta.logger.info(`Aqara W100: Parsed M=${processedValue}`);
                         break;
                     case 't':
                         newKey = 'TW';
+                        stateKey = 'occupied_heating_setpoint';
                         processedValue = parseInt(value, 10);
-                        if (!isNaN(processedValue) && processedValue >= 15 && processedValue <= 30) {
-                            pmtsd.T = processedValue;
-                        }
+                        if (isNaN(processedValue) || processedValue < 15 || processedValue > 30) return;
+                        pmtsd.T = processedValue;
+                        displayValue = processedValue;
                         break;
                     case 's':
                         newKey = 'SW';
+                        stateKey = 'fan_mode';
                         processedValue = parseInt(value, 10);
-                        if (!isNaN(processedValue) && [0, 1, 2, 3].includes(processedValue)) {
-                            pmtsd.S = processedValue;
-                        }
+                        if (isNaN(processedValue) || ![0, 1, 2, 3].includes(processedValue)) return;
+                        pmtsd.S = processedValue;
+                        const speedNames = ['auto', 'low', 'medium', 'high'];
+                        displayValue = speedNames[processedValue];
                         break;
                     case 'd':
                         newKey = 'DW';
+                        stateKey = 'unused';
                         processedValue = parseInt(value, 10);
-                        if (!isNaN(processedValue) && [0, 1].includes(processedValue)) {
-                            pmtsd.D = processedValue;
-                        }
+                        if (isNaN(processedValue) || ![0, 1].includes(processedValue)) return;
+                        pmtsd.D = processedValue;
+                        displayValue = String(processedValue);
                         break;
                     default:
                         newKey = key.toUpperCase() + 'W';
+                        stateKey = null;
                 }
                 
-                result[newKey] = value; // Keep raw value for display
+                result[newKey] = value;
+                if (stateKey) {
+                    stateUpdate.state[stateKey] = displayValue;
+                    result[stateKey] = displayValue;
+                }
                 partsForCombined.push(`${newKey}${value}`);
             }
         });
 
-        // Prepare display values for climate entity
+        // Combine power state and mode to create system_mode for climate entity
+        // P and M are always valid (initialized from meta.state or defaults)
         const modeDisplay = ['cool', 'heat', 'auto'][pmtsd.M] || 'cool';
-        const speedDisplay = ['auto', 'low', 'medium', 'high'][pmtsd.S] || 'auto';
-
-        // Update climate entity states
-        stateUpdate.state = {
-            occupied_heating_setpoint: pmtsd.T,
-            fan_mode: speedDisplay,
-            system_mode: pmtsd.P === 1 ? 'off' : modeDisplay,
-            unused: String(pmtsd.D),
-            ...result // Add raw PMTSD values
-        };
+        const systemMode = pmtsd.P === 1 ? 'off' : modeDisplay;
+        stateUpdate.state.system_mode = systemMode;
+        result.system_mode = systemMode;
+        meta.logger.info(`Aqara W100: Computed system_mode=${systemMode} from P=${pmtsd.P}, M=${pmtsd.M}`);
 
         // Format date and time
         const date = new Date();
