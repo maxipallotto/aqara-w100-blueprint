@@ -21,14 +21,25 @@ const {
 const NS = "zhc:lumi";
 const manufacturerCode = lumi.manufacturerCode;
 
- // Custom converter to sync temperature to local_temperature for climate entity
+ // Custom converter to:
+ // - Expose temperature as a standard sensor value for Z2M
+ // - Always keep local_temperature in sync for the climate entity
  const temperature_with_local = {
      cluster: 'msTemperatureMeasurement',
      type: ['attributeReport', 'readResponse'],
      convert: (model, msg, publish, options, meta) => {
-         const temperature = parseFloat(msg.data['measuredValue']) / 100.0;
-         // Return both temperature (for sensor) and local_temperature for climate entity
+         const measured = msg.data['measuredValue'];
+         if (measured == null) {
+             return;
+         }
+
+         const temperature = Number(measured) / 100.0;
+
+         // Always expose both:
+         // - temperature: standard Z2M sensor field (used for graphs, automations, etc.)
+         // - local_temperature: for climate entity, even when thermostat mode is OFF
          return {
+             temperature,
              local_temperature: temperature,
          };
      },
