@@ -21,76 +21,146 @@ const {
 const NS = "zhc:lumi";
 const manufacturerCode = lumi.manufacturerCode;
 
-// Custom converter to sync temperature to local_temperature for climate entity
-const temperature_with_local = {
-    cluster: 'msTemperatureMeasurement',
-    type: ['attributeReport', 'readResponse'],
-    convert: (model, msg, publish, options, meta) => {
-        const temperature = parseFloat(msg.data['measuredValue']) / 100.0;
-        // Return both temperature (for sensor) and local_temperature (for climate entity)
-        return {
-            local_temperature: temperature
-        };
-    },
-};
+ // Custom converter to sync temperature to local_temperature for climate entity
+ const temperature_with_local = {
+     cluster: 'msTemperatureMeasurement',
+     type: ['attributeReport', 'readResponse'],
+     convert: (model, msg, publish, options, meta) => {
+         const temperature = parseFloat(msg.data['measuredValue']) / 100.0;
+         // Return both temperature (for sensor) and local_temperature for climate entity
+         return {
+             local_temperature: temperature,
+         };
+     },
+ };
+
+ // Default logical state for W100 thermostat-related features.
+ // NOTE:
+ // - Thermostat_Mode MUST start as OFF to reflect physical device behavior on first join.
+ // - system_mode is initialized to "off" as well so the climate entity starts powered off.
+ const DEFAULTS = {
+     system_mode: 'off',
+     occupied_heating_setpoint: 15,
+     fan_mode: 'auto',
+     unused: '0',
+     Thermostat_Mode: 'OFF',
+ };
+
+ // Ensure we always have a deterministic baseline and expose Thermostat_Mode=OFF by default.
+ function ensureDefaults(meta) {
+     if (!meta.device) meta.device = {};
+     if (!meta.device.meta) meta.device.meta = {};
+
+     const state = meta.state || {};
+
+     const normalized = {
+         system_mode: state.system_mode ?? DEFAULTS.system_mode,
+         occupied_heating_setpoint: state.occupied_heating_setpoint ?? DEFAULTS.occupied_heating_setpoint,
+         fan_mode: state.fan_mode ?? DEFAULTS.fan_mode,
+         unused: state.unused ?? DEFAULTS.unused,
+         Thermostat_Mode: state.Thermostat_Mode ?? DEFAULTS.Thermostat_Mode,
+     };
+
+     // Push normalized values into meta.state so Z2M exposes them immediately,
+     // including Thermostat_Mode='OFF' on first contact.
+     meta.state = {
+         ...state,
+         system_mode: normalized.system_mode,
+         occupied_heating_setpoint: normalized.occupied_heating_setpoint,
+         fan_mode: normalized.fan_mode,
+         unused: normalized.unused,
+         Thermostat_Mode: normalized.Thermostat_Mode,
+     };
+
+     if (!meta.device.meta.initialized) {
+         meta.device.meta.initialized = true;
+     }
+
+     return normalized;
+ }
+
 
 const W100_0844_req = {
     cluster: 'manuSpecificLumi',
     type: ['attributeReport', 'readResponse'],
     convert: async (model, msg, publish, options, meta) => {
+        if (!meta.state) meta.state = {};
+
+        // Ensure a full, deterministic baseline is present in meta.state on first contact.
+        // This populates all climate defaults so Z2M exposes non-null values:
+        // - Thermostat_Mode: 'OFF'
+        // - system_mode: 'off'
+        // - occupied_heating_setpoint: 15
+        // - fan_mode: 'auto'
+        // - unused: '0'
+        const base = ensureDefaults(meta);
+
         const attr = msg.data[65522];
-        if (!attr || !Buffer.isBuffer(attr)) return;
+        if (!attr || !Buffer.isBuffer(attr)) {
+            // No PMTSD payload, but we can still publish the initialized defaults once.
+            return {
+                Thermostat_Mode: base.Thermostat_Mode,
+                system_mode: base.system_mode,
+                occupied_heating_setpoint: base.occupied_heating_setpoint,
+                fan_mode: base.fan_mode,
+                unused: base.unused,
+            };
+        }
 
         const endsWith = Buffer.from([0x08, 0x00, 0x08, 0x44]);
         if (attr.slice(-4).equals(endsWith)) {
             meta.logger.info(`Aqara W100: PMTSD request detected from device ${meta.device.ieeeAddr}`);
-            
+
+            // Ensure we always have a deterministic baseline before responding
+            const base = ensureDefaults(meta);
+
             // Function to convert string -> number
             const convertToNumber = (key, value) => {
                 if (typeof value !== 'string') return value;
-                
-                switch(key) {
-                    case 'system_mode':
-                        const modeMap = { 'cool': 0, 'heat': 1, 'auto': 2 };
+
+                switch (key) {
+                    case 'system_mode': {
+                        const modeMap = {cool: 0, heat: 1, auto: 2};
                         return modeMap[value.toLowerCase()] ?? 0;
-                    case 'fan_mode':
-                        const speedMap = { 'auto': 0, 'low': 1, 'medium': 2, 'high': 3 };
+                    }
+                    case 'fan_mode': {
+                        const speedMap = {auto: 0, low: 1, medium: 2, high: 3};
                         return speedMap[value.toLowerCase()] ?? 0;
+                    }
                     case 'unused':
                         return parseInt(value, 10);
                     default:
                         return value;
                 }
             };
-            
-            // Retrieve PMTSD values from meta.state and convert to numbers
-            // When off, preserve the last active mode from device.meta
+
+            // Determine mode (M) using current or last active when off
             let modeValue = 0;
-            if (meta.state?.system_mode === 'off') {
-                // Device is off, use stored last active mode
+            if (base.system_mode === 'off') {
+                // Device logically off: use stored last active mode or default cool(0)
                 modeValue = meta.device.meta?.lastActiveMode ?? 0;
             } else {
-                // Device is on, use current mode
-                modeValue = convertToNumber('system_mode', meta.state?.system_mode) ?? 0;
+                modeValue = convertToNumber('system_mode', base.system_mode) ?? 0;
             }
-            
+
             const pmtsdValues = {
-                P: meta.state?.system_mode === 'off' ? 1 : 0,
+                // P=1 when system_mode is 'off', else 0
+                P: base.system_mode === 'off' ? 1 : 0,
                 M: modeValue,
-                T: meta.state?.occupied_heating_setpoint ?? 15,
-                S: convertToNumber('fan_mode', meta.state?.fan_mode) ?? 0,
-                D: convertToNumber('unused', meta.state?.unused) ?? 0
+                T: base.occupied_heating_setpoint,
+                S: convertToNumber('fan_mode', base.fan_mode) ?? 0,
+                D: convertToNumber('unused', base.unused) ?? 0,
             };
-            
-            // Send PMTSD frame with stored values
+
+            // Send PMTSD frame built from a well-defined baseline
             try {
                 await PMTSD_to_W100.convertSet(meta.device.getEndpoint(1), 'PMTSD_to_W100', pmtsdValues, meta);
-                meta.logger.info(`Aqara W100: PMTSD frame sent for ${meta.device.ieeeAddr}`);
+                meta.logger.info(`Aqara W100: PMTSD frame sent for ${meta.device.ieeeAddr} in response to 08000844`);
             } catch (error) {
                 meta.logger.error(`Aqara W100: Failed to send PMTSD frame: ${error.message}`);
             }
-            
-            return { action: 'W100_PMTSD_request' };
+
+            return {action: 'W100_PMTSD_request'};
         }
     },
 };
@@ -101,34 +171,40 @@ const PMTSD_to_W100 = {
         // Logger fallback in case meta.logger is undefined
         const log = meta.logger || logger;
         
-        // Extract current P and M from meta.state.system_mode
+        // Ensure deterministic baseline for all outgoing writes
+        const base = ensureDefaults(meta);
+
+        // Extract current P and M from baseline system_mode
         let initialP = 0;
         let initialM = 0;
-        if (meta.state?.system_mode) {
-            if (meta.state.system_mode === 'off') {
-                initialP = 1;
-                initialM = 0; // Default mode when off
-            } else {
-                initialP = 0;
-                const modeMap = { 'cool': 0, 'heat': 1, 'auto': 2 };
-                initialM = modeMap[meta.state.system_mode] ?? 0;
-            }
+        if (base.system_mode === 'off') {
+            initialP = 1;
+            // When off, keep lastActiveMode for M if present, otherwise default to cool(0)
+            initialM = meta.device.meta?.lastActiveMode ?? 0;
+        } else {
+            initialP = 0;
+            const modeMap = {cool: 0, heat: 1, auto: 2};
+            initialM = modeMap[base.system_mode] ?? 0;
         }
-        
-        // Extract current S from meta.state.fan_mode
+
+        // Extract current S from baseline fan_mode
         let initialS = 0;
-        if (meta.state?.fan_mode) {
-            const speedMap = { 'auto': 0, 'low': 1, 'medium': 2, 'high': 3 };
-            initialS = speedMap[meta.state.fan_mode] ?? 0;
+        {
+            const speedMap = {auto: 0, low: 1, medium: 2, high: 3};
+            initialS = speedMap[base.fan_mode] ?? 0;
         }
-        
-        // Retrieve current PMTSD values from meta.state
+
+        // Retrieve current PMTSD values from baseline
         let pmtsd = {
             P: initialP,
             M: initialM,
-            T: meta.state?.occupied_heating_setpoint ?? 15,
+            T: typeof base.occupied_heating_setpoint === 'string'
+                ? parseInt(base.occupied_heating_setpoint, 10)
+                : base.occupied_heating_setpoint,
             S: initialS,
-            D: meta.state?.unused ?? 0
+            D: typeof base.unused === 'string'
+                ? parseInt(base.unused, 10)
+                : base.unused,
         };
 
         // Convert text values to numbers for internal storage
@@ -390,23 +466,30 @@ const PMTSD_from_W100 = {
         const partsForCombined = [];
         const pairs = payloadAscii.split('_');
         
-        // Initialize P and M from meta.state since device may send partial updates
-        // Extract P and M from current system_mode if available
+        // Ensure deterministic baseline; device may send partial updates
+        const base = ensureDefaults(meta);
+
+        // Initialize P and M from baseline system_mode
         let initialP = 0;
         let initialM = 0;
-        if (meta.state?.system_mode) {
-            if (meta.state.system_mode === 'off') {
-                initialP = 1;
-                // Restore last active mode when off
-                initialM = meta.device.meta?.lastActiveMode ?? 0;
-            } else {
-                initialP = 0;
-                const modeMap = { 'cool': 0, 'heat': 1, 'auto': 2 };
-                initialM = modeMap[meta.state.system_mode] ?? 0;
-            }
+        if (base.system_mode === 'off') {
+            initialP = 1;
+            // When off, restore last active mode if known, else cool(0)
+            initialM = meta.device.meta?.lastActiveMode ?? 0;
+        } else {
+            initialP = 0;
+            const modeMap = {cool: 0, heat: 1, auto: 2};
+            initialM = modeMap[base.system_mode] ?? 0;
         }
-        
-        const pmtsd = { P: initialP, M: initialM, T: 15, S: 0, D: 0 }; // Initialize from current state
+
+        // Start from defaults for the rest; they will be overridden by payload if present
+        const pmtsd = {
+            P: initialP,
+            M: initialM,
+            T: 15,
+            S: 0,
+            D: 0,
+        };
         
         pairs.forEach(p => {
             if (p.length >= 2) {
@@ -593,6 +676,10 @@ const Thermostat_Mode = {
         }
 
         log.info(`Aqara W100: Thermostat_Mode set to ${value}`);
+
+        // Make sure baseline is marked initialized once thermostat mode is touched
+        ensureDefaults(meta);
+
         return {state: {Thermostat_Mode: value}};
     },
 };
@@ -604,18 +691,57 @@ module.exports = {
     description: "Climate Sensor W100",
     fromZigbee: [W100_0844_req, PMTSD_from_W100, temperature_with_local],
     toZigbee: [PMTSD_to_W100, Thermostat_Mode],
-    configure: async (device, coordinatorEndpoint, logger) => {
-        // Initialize default values on first connection
-        const endpoint = device.getEndpoint(1);
-        
-        // Publish initial default values
-        return {
-            occupied_heating_setpoint: 15,
-            fan_mode: 'auto',
-            system_mode: 'cool',
-            unused: '0',
-            Thermostat_Mode: 'OFF'
-        };
+    configure: async (device, coordinatorEndpoint, loggerInstance) => {
+        // Keep configuration side-effect free regarding physical thermostat mode.
+        // We only:
+        // - Seed logical defaults in device.meta.state so Z2M has a consistent baseline.
+        // - Explicitly send Thermostat_Mode = OFF frame once, to ensure the device
+        //   remains out of thermostat mode (or is turned off if it defaulted to ON).
+        //
+        // We DO NOT send any Thermostat_Mode ON / enable frames here.
+
+        const log = loggerInstance || logger || console;
+
+        if (!device.meta) {
+            device.meta = {};
+        }
+        if (!device.meta.state) {
+            device.meta.state = {};
+        }
+
+        // Seed defaults only if not already defined (avoid overwriting restored/user state).
+        if (device.meta.state.system_mode == null) {
+            device.meta.state.system_mode = 'off';
+        }
+        if (device.meta.state.occupied_heating_setpoint == null) {
+            device.meta.state.occupied_heating_setpoint = 15;
+        }
+        if (device.meta.state.fan_mode == null) {
+            device.meta.state.fan_mode = 'auto';
+        }
+        if (device.meta.state.unused == null) {
+            device.meta.state.unused = '0';
+        }
+        if (device.meta.state.Thermostat_Mode == null) {
+            device.meta.state.Thermostat_Mode = 'OFF';
+        }
+
+        // Best-effort: actively send Thermostat_Mode = OFF to keep device out of thermostat mode.
+        try {
+            await Thermostat_Mode.convertSet(device, 'Thermostat_Mode', 'OFF', {
+                device,
+                state: device.meta.state,
+                logger: log,
+            });
+        } catch (error) {
+            if (typeof log.info === 'function') {
+                log.info(`Aqara W100: failed to send initial Thermostat_Mode OFF during configure: ${error.message}`);
+            }
+        }
+
+        if (typeof log.info === 'function') {
+            log.info('Aqara W100: configure completed, defaults seeded and Thermostat_Mode enforced OFF without enabling thermostat mode');
+        }
     },
     exposes: [
         // Thermostat Mode control
