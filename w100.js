@@ -739,8 +739,35 @@ module.exports = {
             }
         }
 
+        // Force temperature reporting for the internal sensor on endpoint 1:
+        // - Min interval: 10s
+        // - Max interval: 3600s
+        // - Min reportable change: 100 (i.e. 1.00°C, as Zigbee uses 0.01°C units)
+        try {
+            const endpoint = device.getEndpoint(1) || coordinatorEndpoint;
+            if (endpoint && typeof endpoint.configureReporting === 'function') {
+                await endpoint.configureReporting('msTemperatureMeasurement', [
+                    {
+                        attribute: 'measuredValue',
+                        minimumReportInterval: 10,
+                        maximumReportInterval: 3600,
+                        reportableChange: 100,
+                    },
+                ]);
+                if (typeof log.info === 'function') {
+                    log.info('Aqara W100: temperature reporting configured (10/3600/100) on msTemperatureMeasurement.measuredValue');
+                }
+            } else if (typeof log.warn === 'function') {
+                log.warn('Aqara W100: unable to configure temperature reporting, missing endpoint(1) or configureReporting');
+            }
+        } catch (error) {
+            if (typeof log.warn === 'function') {
+                log.warn(`Aqara W100: failed to configure temperature reporting: ${error.message}`);
+            }
+        }
+
         if (typeof log.info === 'function') {
-            log.info('Aqara W100: configure completed, defaults seeded and Thermostat_Mode enforced OFF without enabling thermostat mode');
+            log.info('Aqara W100: configure completed, defaults seeded, Thermostat_Mode enforced OFF, and temperature reporting forced.');
         }
     },
     exposes: [
