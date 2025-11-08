@@ -750,10 +750,10 @@ module.exports = {
             }
         }
 
-        // Force temperature reporting for the internal sensor on endpoint 1:
+        // Configure reporting for the internal temperature sensor (endpoint 1):
         // - Min interval: 10s
         // - Max interval: 3600s
-        // - Min reportable change: 100 (i.e. 1.00°C, as Zigbee uses 0.01°C units)
+        // - Min reportable change: 100 (1.00°C in 0.01°C units)
         try {
             const endpoint = device.getEndpoint(1) || coordinatorEndpoint;
             if (endpoint && typeof endpoint.configureReporting === 'function') {
@@ -777,8 +777,36 @@ module.exports = {
             }
         }
 
+        // Configure reporting for standard Zigbee battery cluster (genPowerCfg).
+        // This avoids a null battery in Z2M by:
+        // - Actively requesting reports
+        // - Letting m.battery() map batteryPercentageRemaining into a proper battery %
+        try {
+            const endpoint = device.getEndpoint(1) || coordinatorEndpoint;
+            if (endpoint && typeof endpoint.configureReporting === 'function') {
+                await endpoint.configureReporting('genPowerCfg', [
+                    {
+                        // 0.5% steps encoded as 0-200
+                        attribute: 'batteryPercentageRemaining',
+                        minimumReportInterval: 3600,  // 1 hour
+                        maximumReportInterval: 43200, // 12 hours
+                        reportableChange: 1,          // 0.5% step
+                    },
+                ]);
+                if (typeof log.info === 'function') {
+                    log.info('Aqara W100: battery reporting configured on genPowerCfg.batteryPercentageRemaining');
+                }
+            } else if (typeof log.warn === 'function') {
+                log.warn('Aqara W100: unable to configure battery reporting, missing endpoint(1) or configureReporting');
+            }
+        } catch (error) {
+            if (typeof log.warn === 'function') {
+                log.warn(`Aqara W100: failed to configure battery reporting: ${error.message}`);
+            }
+        }
+
         if (typeof log.info === 'function') {
-            log.info('Aqara W100: configure completed, defaults seeded, Thermostat_Mode enforced OFF, and temperature reporting forced.');
+            log.info('Aqara W100: configure completed, defaults seeded, Thermostat_Mode enforced OFF, temperature reporting forced, and genPowerCfg battery reporting configured.');
         }
     },
     exposes: [
