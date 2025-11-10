@@ -826,44 +826,6 @@ module.exports = {
             }
         }
 
-        // Configure binding and reporting for Lumi-specific battery in manuSpecificLumi cluster
-        // The W100 reports battery via attribute 0x00F7, not via standard genPowerCfg
-        try {
-            const endpoint = device.getEndpoint(1) || coordinatorEndpoint;
-            if (endpoint) {
-                // Bind the manuSpecificLumi cluster
-                await endpoint.bind('manuSpecificLumi', coordinatorEndpoint);
-                if (typeof log.info === 'function') {
-                    log.info('Aqara W100: manuSpecificLumi cluster bound for battery reporting');
-                }
-                
-                // Configure reporting for attribute 0x00F7 which contains battery data
-                await endpoint.configureReporting('manuSpecificLumi', [
-                    {
-                        attribute: {ID: 0x00F7, type: 0x41}, // Custom attribute, type 0x41 (octet string)
-                        minimumReportInterval: 3600,   // 1 hour
-                        maximumReportInterval: 86400,  // 24 hours
-                        reportableChange: 0,           // Report any change
-                    },
-                ], {manufacturerCode: 4447});
-                
-                if (typeof log.info === 'function') {
-                    log.info('Aqara W100: battery reporting configured on manuSpecificLumi.0x00F7');
-                }
-                
-                // Perform initial read to get current battery value
-                await endpoint.read('manuSpecificLumi', [0x00F7], {manufacturerCode: 4447});
-                if (typeof log.info === 'function') {
-                    log.info('Aqara W100: initial battery read requested from manuSpecificLumi.0x00F7');
-                }
-            } else if (typeof log.warn === 'function') {
-                log.warn('Aqara W100: unable to configure battery reporting, missing endpoint(1)');
-            }
-        } catch (error) {
-            if (typeof log.warn === 'function') {
-                log.warn(`Aqara W100: failed to configure battery reporting: ${error.message}`);
-            }
-        }
 
         if (typeof log.info === 'function') {
             log.info('Aqara W100: configure completed, defaults seeded, thermostat_mode enforced OFF, temperature reporting forced, and Lumi-specific battery reporting configured.');
