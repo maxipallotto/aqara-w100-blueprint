@@ -89,6 +89,12 @@ blueprint:
       selector:
         entity:
           domain: number
+    w100_thermostat_mode:
+      name: W100 Thermostat Mode Switch
+      description: The W100 thermostat mode switch entity
+      selector:
+        entity:
+          domain: switch
 
 variables:
   main_thermostat: !input main_thermostat
@@ -103,6 +109,7 @@ variables:
   external_humidity_sensor: !input external_humidity_sensor
   w100_external_temperature: !input w100_external_temperature
   w100_external_humidity: !input w100_external_humidity
+  w100_thermostat_mode: !input w100_thermostat_mode
 
 triggers:
   - trigger: state
@@ -128,11 +135,19 @@ actions:
           - condition: trigger
             id:
               - climate_state
+          - condition: state
+            entity_id: !input w100_thermostat_mode
+            state:
+              - "on"
         sequence:
           - if:
               - condition: template
                 value_template: >-
                   {{ states(main_thermostat) != states(aqara_w100) }}
+              - condition: state
+                entity_id: !input w100_thermostat_mode
+                state:
+                  - "on"
             then:
               - action: climate.set_hvac_mode
                 target:
@@ -160,6 +175,10 @@ actions:
           - condition: trigger
             id:
               - w100_climate_state
+          - condition: state
+            entity_id: !input w100_thermostat_mode
+            state:
+              - "on"
         sequence:
           - if:
               - condition: template

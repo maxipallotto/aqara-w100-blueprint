@@ -90,12 +90,16 @@ Changes are converted into the Aqara-specific PMTSD protocol frames and sent to 
 
 ---
 
-### 5. Battery reporting
+### 5. Battery voltage and percentage
 
-The W100 does not use standard `genPowerCfg` battery reporting. Instead, the converter:
+The W100 does not use standard `batteryVoltage` reporting. The converter:
 
-- Parses Aqara's proprietary TLV data from the `manuSpecificLumi` cluster (attribute **`0xF7`**)
-- Extracts battery percentage directly from the data object (key `0x05`)
+- Parses Aqara's proprietary TLV data (manuSpecificLumi, attribute `0x247`).
+- Extracts:
+  - `battery_voltage` (V)
+  - `battery` (%), derived from voltage.
+- Also configures standard `genPowerCfg.batteryPercentageRemaining` reporting when available.
+
 
 ---
 
