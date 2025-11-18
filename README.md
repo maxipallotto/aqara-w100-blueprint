@@ -7,7 +7,7 @@ This project provides:
 
 It turns the W100 into a reliable, flexible front-end for your heating/cooling system while preserving its native behavior and making it play nicely with your existing Home Assistant setup.
 
-Important: The external converter allows decimal in temperature setpoint. However the W100 firmware only report integer values. 
+**Important:** The external converter allows decimal in temperature setpoint. However the W100 firmware only reports integer values. 
 Until Aqara fix this (will they ?), there's no way to set decimal set points from the w100 panel. 
 
 ---
