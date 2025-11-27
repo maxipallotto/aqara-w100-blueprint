@@ -1,11 +1,17 @@
 # Aqara W100 External Converter for Zigbee2MQTT + Home Assistant Blueprint
 
-This project provides:
+**Edit:** Those changes have been merged in zigbee-herdsman-converters by ['PR #10787'](https://github.com/Koenkk/zigbee-herdsman-converters/pull/10787)
+They will be available for next z2m december 2025 release. 
+
+**This project provides:**
 
 - A dedicated Zigbee2MQTT external converter for the Aqara W100 Climate Sensor.
 - A Home Assistant blueprint for seamless, bidirectional sync between the W100's virtual thermostat and any climate entity.
 
 It turns the W100 into a reliable, flexible front-end for your heating/cooling system while preserving its native behavior and making it play nicely with your existing Home Assistant setup.
+
+**Important:** The external converter allows decimal in temperature setpoint. However the W100 firmware only reports integer values. 
+Until Aqara fix this (will they ?), there's no way to set decimal set points from the w100 panel. 
 
 ---
 
