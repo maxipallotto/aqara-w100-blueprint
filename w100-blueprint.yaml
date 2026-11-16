@@ -90,6 +90,13 @@ variables:
   external_humidity_sensor: !input external_humidity_sensor
   thermostat_mode_switch: >-
     {{ 'switch.' ~ aqara_w100.split('.')[1] ~ '_thermostat_mode' }}
+  # Names different climate integrations use for the middle fan speed.
+  # They are treated as the same speed when syncing in either direction.
+  fan_medium_aliases:
+    - medium
+    - mid
+    - med
+    - middle
 
 triggers:
   - trigger: state
@@ -149,36 +156,34 @@ actions:
                     {{ state_attr(main_thermostat, "temperature") }}
               - delay:
                   seconds: "{{ sync_delay }}"
+          # Fan mode: main thermostat -> W100.
+          # fan_to_send is the W100's own name for the main thermostat's
+          # speed, or '' when they already match or the W100 has no such speed.
+          - variables:
+              fan_to_send: >-
+                {%- set src = (state_attr(main_thermostat, 'fan_mode') or '') | string | lower -%}
+                {%- set cur = (state_attr(aqara_w100, 'fan_mode') or '') | string | lower -%}
+                {%- set src_key = 'medium' if src in fan_medium_aliases else src -%}
+                {%- set cur_key = 'medium' if cur in fan_medium_aliases else cur -%}
+                {%- set ns = namespace(match='') -%}
+                {%- for m in state_attr(aqara_w100, 'fan_modes') or [] -%}
+                  {%- set m_key = 'medium' if (m | string | lower) in fan_medium_aliases else (m | string | lower) -%}
+                  {%- if ns.match == '' and m_key == src_key -%}{%- set ns.match = m -%}{%- endif -%}
+                {%- endfor -%}
+                {{- ns.match if (src_key != '' and src_key != cur_key) else '' -}}
           - if:
               - condition: template
                 value_template: >-
-                  {# Define the variables#}
-                  {% set source = state_attr(main_thermostat, "fan_mode") %}
-                  {% set target = state_attr(aqara_w100, "fan_mode") %}
-                  {# Normalize the source to lowercase and map med->medium for comparison #}
-                  {% set source_norm = 'medium' if source | lower == 'med' else source | lower %}
-                  {# Compare normalized values #}
-                  {{ 
-                    (source_norm != target) and 
-                    (hvac_has_vent | default(false) | bool) 
-                  }}
+                  {{ (hvac_has_vent | default(false) | bool) and fan_to_send != '' }}
             then:
               - action: climate.set_fan_mode
                 target:
                   entity_id: !input aqara_w100
                 data:
-                  fan_mode: |
-                    {% set source = state_attr(main_thermostat, "fan_mode") %}
-                    {# If source is med/medium, pass "medium" to the Aqara #}
-                    {% if source | lower == 'med' or source | lower == 'medium' %}
-                      medium
-                    {# Otherwise just pass the source through #}
-                    {% else %}
-                      {{ source }}
-                    {% endif %}
+                  fan_mode: "{{ fan_to_send }}"
               - delay:
                   seconds: "{{ sync_delay }}"
-      
+
       - conditions:
           - condition: trigger
             id:
@@ -240,36 +245,32 @@ actions:
                   entity_id: !input main_thermostat
               - delay:
                   seconds: "{{ sync_delay }}"
+          # Fan mode: W100 -> main thermostat.
+          # fan_to_send is the main thermostat's own name for the W100's
+          # speed (e.g. "medium" -> "mid"), or '' when they already match
+          # or the main thermostat has no such speed.
+          - variables:
+              fan_to_send: >-
+                {%- set src = (state_attr(aqara_w100, 'fan_mode') or '') | string | lower -%}
+                {%- set cur = (state_attr(main_thermostat, 'fan_mode') or '') | string | lower -%}
+                {%- set src_key = 'medium' if src in fan_medium_aliases else src -%}
+                {%- set cur_key = 'medium' if cur in fan_medium_aliases else cur -%}
+                {%- set ns = namespace(match='') -%}
+                {%- for m in state_attr(main_thermostat, 'fan_modes') or [] -%}
+                  {%- set m_key = 'medium' if (m | string | lower) in fan_medium_aliases else (m | string | lower) -%}
+                  {%- if ns.match == '' and m_key == src_key -%}{%- set ns.match = m -%}{%- endif -%}
+                {%- endfor -%}
+                {{- ns.match if (src_key != '' and src_key != cur_key) else '' -}}
           - if:
               - condition: template
                 value_template: >-
-                  {# Define the variables#}
-                  {% set source = state_attr(main_thermostat, "fan_mode") %}
-                  {% set target = state_attr(aqara_w100, "fan_mode") %}
-                  {# Normalize source to lowercase and map med->medium for comparison #}
-                  {% set source_norm = 'medium' if source | lower == 'med' else source | lower %}
-                  {# Compare normalized values #}
-                  {{ 
-                    (source_norm != target) and 
-                    (hvac_has_vent | default(false) | bool) 
-                  }}
+                  {{ (hvac_has_vent | default(false) | bool) and fan_to_send != '' }}
             then:
               - action: climate.set_fan_mode
                 target:
                   entity_id: !input main_thermostat
                 data:
-                  fan_mode: |
-                    {% set source = state_attr(aqara_w100, "fan_mode") %}
-                    {% set target_valid_list = state_attr(main_thermostat, "fan_modes") %}
-                    
-                    {# If source is med/medium, find the target's specific medium mode #}
-                    {% if source | lower == 'med' or source | lower == 'medium' %}
-                      {{ target_valid_list | select('search', '(?i)^med') | first | default(source) }}
-                      
-                    {# Otherwise just pass the source through #}
-                    {% else %}
-                      {{ source }}
-                    {% endif %}
+                  fan_mode: "{{ fan_to_send }}"
               - delay:
                   seconds: "{{ sync_delay }}"
 
@@ -312,3 +313,8 @@ actions:
 
 mode: queued
 max: 10
+
+# External sensor updates start a run every few seconds, which would push
+# the W100 and thermostat runs out of the default 5 stored traces.
+trace:
+  stored_traces: 20
